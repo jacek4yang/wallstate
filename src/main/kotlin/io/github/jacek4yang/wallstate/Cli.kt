@@ -68,7 +68,7 @@ object Cli {
         println("  inspect <backup.zip>  show archive manifest and entries")
         println("  verify <backup.zip>   verify archive integrity (schema, entries, SHA-256)")
         println("  restore <backup.zip>  transactionally restore wallpaper state from an archive")
-        println("  set <img> <system|lock|both> [dimAmount]")
+        println("  set <img> <system|lock|both> [dimAmount] [allowBackup]")
         println("                        test helper: set a wallpaper through the framework path")
         return EXIT_USAGE
     }
@@ -189,10 +189,18 @@ object Cli {
             "both" -> WallpaperFlags.SYSTEM or WallpaperFlags.LOCK
             else -> throw UsageException("destination must be system|lock|both, got '$destination'")
         }
-        val dimAmount = rest.getOrNull(2)?.let {
-            it.toDoubleOrNull() ?: throw UsageException("dim amount must be a number in [0,1], got '$it'")
-        }?.also {
-            if (it < 0.0 || it > 1.0) throw UsageException("dim amount must be in [0,1], got $it")
+        // Optional trailing flags: a number is the dim amount, true/false is allowBackup.
+        var dimAmount: Double? = null
+        var allowBackup = true
+        for (flag in rest.drop(2)) {
+            when {
+                flag.equals("true", ignoreCase = true) -> allowBackup = true
+                flag.equals("false", ignoreCase = true) -> allowBackup = false
+                flag.toDoubleOrNull()?.let { it in 0.0..1.0 } == true -> dimAmount = flag.toDoubleOrNull()
+                else -> throw UsageException(
+                    "expected a dim amount in [0,1] or true/false for allowBackup, got '$flag'"
+                )
+            }
         }
 
         AndroidEnv.requireShellUid()
@@ -200,7 +208,7 @@ object Cli {
         val userId = AndroidEnv.currentUser()
         val file = File(imagePath)
         if (!file.isFile) throw WallstateException("image not found: $imagePath")
-        val write = bridge.openWallpaperWrite(null, null, true, which, userId)
+        val write = bridge.openWallpaperWrite(null, null, allowBackup, which, userId)
         try {
             file.inputStream().use { input -> input.copyTo(write.stream()) }
         } finally {
