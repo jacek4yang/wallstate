@@ -1,0 +1,6 @@
+# Normalize line endings; shell scripts must stay LF.
+* text=auto
+*.sh text eol=lf
+scripts/wallstate text eol=lf
+gradlew text eol=lf
+*.jar binary

@@ -101,10 +101,24 @@ class ArchiveReader(file: File) : Closeable {
         if (entry.size > Archive.MAX_IMAGE_BYTES) {
             throw ArchiveException("$name exceeds maximum size ${Archive.MAX_IMAGE_BYTES}")
         }
-        return CappedInputStream(zip.getInputStream(entry), name, Archive.MAX_IMAGE_BYTES)
+        return try {
+            CappedInputStream(zip.getInputStream(entry), name, Archive.MAX_IMAGE_BYTES)
+        } catch (e: ArchiveException) {
+            throw e
+        } catch (e: IOException) {
+            throw ArchiveException("cannot read archive entry $name: ${e.message}")
+        }
     }
 
-    fun sha256Of(name: String): String = openEntry(name).use { Hashing.sha256(it) }
+    fun sha256Of(name: String): String = openEntry(name).use { stream ->
+        try {
+            Hashing.sha256(stream)
+        } catch (e: ArchiveException) {
+            throw e
+        } catch (e: IOException) {
+            throw ArchiveException("failed reading archive entry $name: ${e.message}")
+        }
+    }
 
     /**
      * Full integrity validation: entry names (no duplicates, no unexpected or missing
@@ -112,25 +126,8 @@ class ArchiveReader(file: File) : Closeable {
      * Returns the validated manifest.
      */
     fun verify(): BackupManifest {
-        val names = allEntryNames()
-        if (names.size > Archive.MAX_ENTRIES) {
-            throw ArchiveException("archive has too many entries: ${names.size}")
-        }
-        val duplicates = names.groupingBy { it }.eachCount().filterValues { it > 1 }.keys
-        if (duplicates.isNotEmpty()) {
-            throw ArchiveException("archive contains duplicate entries: ${duplicates.sorted()}")
-        }
         val manifest = readManifest()
-        val expected = Archive.expectedEntries(manifest)
-        val actual = names.toSet()
-        val unexpected = (actual - expected).sorted()
-        if (unexpected.isNotEmpty()) {
-            throw ArchiveException("archive contains unexpected entries: $unexpected")
-        }
-        val missing = (expected - actual).sorted()
-        if (missing.isNotEmpty()) {
-            throw ArchiveException("archive is missing entries: $missing")
-        }
+        checkEntryList(allEntryNames(), manifest)
         checkHash(Archive.SYSTEM_ORIGINAL, manifest.system.originalSha256)
         manifest.system.croppedSha256?.let { checkHash(Archive.SYSTEM_CROPPED, it) }
         if (manifest.lock.mode == LockMode.SEPARATE) {
@@ -142,6 +139,27 @@ class ArchiveReader(file: File) : Closeable {
         return manifest
     }
 
+    /** Validates a complete entry name list: count, duplicates, unexpected, missing. */
+    fun checkEntryList(names: List<String>, manifest: BackupManifest) {
+        if (names.size > Archive.MAX_ENTRIES) {
+            throw ArchiveException("archive has too many entries: ${names.size}")
+        }
+        val duplicates = names.groupingBy { it }.eachCount().filterValues { it > 1 }.keys
+        if (duplicates.isNotEmpty()) {
+            throw ArchiveException("archive contains duplicate entries: ${duplicates.sorted()}")
+        }
+        val expected = Archive.expectedEntries(manifest)
+        val actual = names.toSet()
+        val unexpected = (actual - expected).sorted()
+        if (unexpected.isNotEmpty()) {
+            throw ArchiveException("archive contains unexpected entries: $unexpected")
+        }
+        val missing = (expected - actual).sorted()
+        if (missing.isNotEmpty()) {
+            throw ArchiveException("archive is missing entries: $missing")
+        }
+    }
+
     /** Streams the entry into [out] without writing anything to the filesystem. */
     fun copyEntryTo(name: String, out: OutputStream) {
         openEntry(name).use { input -> input.copyTo(out) }
@@ -151,7 +169,15 @@ class ArchiveReader(file: File) : Closeable {
         if (entry.size > cap) {
             throw ArchiveException("${Archive.MANIFEST_ENTRY} exceeds maximum size $cap")
         }
-        zip.getInputStream(entry).use { return CappedInputStream(it, entry.name, cap).readBytes() }
+        zip.getInputStream(entry).use {
+            return try {
+                CappedInputStream(it, entry.name, cap).readBytes()
+            } catch (e: ArchiveException) {
+                throw e
+            } catch (e: IOException) {
+                throw ArchiveException("failed reading ${entry.name}: ${e.message}")
+            }
+        }
     }
 
     private fun checkHash(name: String, expected: String) {

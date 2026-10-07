@@ -306,6 +306,13 @@ internal object ManifestJson {
             is Long ->
                 if (v in Int.MIN_VALUE..Int.MAX_VALUE) v.toInt()
                 else throw ArchiveException("manifest${whereOf(where)}.$key out of integer range: $v")
+            is java.math.BigDecimal -> {
+                try {
+                    v.intValueExact()
+                } catch (e: ArithmeticException) {
+                    throw ArchiveException("manifest${whereOf(where)}.$key out of integer range: $v")
+                }
+            }
             else -> throw ArchiveException("manifest${whereOf(where)}.$key must be an integer, got ${typeName(v)}")
         }
     }
@@ -316,6 +323,7 @@ internal object ManifestJson {
             is Double -> v
             is Int -> v.toDouble()
             is Long -> v.toDouble()
+            is java.math.BigDecimal -> v.toDouble()
             else -> throw ArchiveException("manifest${whereOf(where)}.$key must be a number, got ${typeName(v)}")
         }
     }
@@ -351,7 +359,7 @@ internal object ManifestJson {
             null -> "null"
             is String -> "string"
             is Int, is Long -> "integer"
-            is Double -> "number"
+            is Double, is Float, is java.math.BigDecimal -> "number"
             is Boolean -> "boolean"
             is JSONObject -> "object"
             is org.json.JSONArray -> "array"

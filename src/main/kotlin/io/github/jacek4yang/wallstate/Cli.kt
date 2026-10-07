@@ -172,15 +172,7 @@ object Cli {
     // ---- helpers ----
 
     internal fun checkStructureOnly(reader: ArchiveReader) {
-        val names = reader.allEntryNames()
-        val duplicates = names.groupingBy { it }.eachCount().filterValues { it > 1 }.keys
-        if (duplicates.isNotEmpty()) throw ArchiveException("duplicate entries: ${duplicates.sorted()}")
-        val manifest = reader.readManifest()
-        val expected = Archive.expectedEntries(manifest)
-        val unexpected = (names.toSet() - expected).sorted()
-        if (unexpected.isNotEmpty()) throw ArchiveException("unexpected entries: $unexpected")
-        val missing = (expected - names.toSet()).sorted()
-        if (missing.isNotEmpty()) throw ArchiveException("missing entries: $missing")
+        reader.checkEntryList(reader.allEntryNames(), reader.readManifest())
     }
 
     private fun idSuffix(bridge: WallpaperBridge, which: Int, userId: Int): String {

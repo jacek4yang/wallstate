@@ -52,6 +52,7 @@ dependencies {
     // needed on the JVM test classpath too.
     compileOnly("org.json:json:20240303")
     testImplementation("org.json:json:20240303")
+    testImplementation(kotlin("test"))
     testImplementation("org.junit.jupiter:junit-jupiter:6.1.3")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:6.1.3")
 

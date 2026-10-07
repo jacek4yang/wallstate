@@ -213,7 +213,7 @@ class WallpaperBridge private constructor(
             method,
             AndroidEnv.SHELL_PACKAGE,   // callingPkg
             null,                       // callingFeatureId
-            newCallback(),              // callback
+            null,                       // callback (read path; no change notifications needed)
             which,
             Bundle(),                   // outParams
             userId,
@@ -403,8 +403,6 @@ class WallpaperBridge private constructor(
             }
         }
     }
-
-    private fun newCallback(): Any = Completion().callback
 }
 
 /** Small helpers for reaching static framework entry points via reflection. */

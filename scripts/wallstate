@@ -1,0 +1,205 @@
+#!/bin/sh
+# wallstate host-side wrapper.
+#
+# Convenience only: pushes wallstate.jar to the phone and runs the device-side
+# CLI over adb. All actual work happens on the device through app_process.
+#
+# Usage:
+#   scripts/wallstate [--serial SERIAL] [--jar PATH] <command> [args...]
+#   scripts/wallstate doctor
+#   scripts/wallstate info
+#   scripts/wallstate backup backup.zip
+#   scripts/wallstate inspect backup.zip
+#   scripts/wallstate verify backup.zip
+#   scripts/wallstate restore backup.zip
+#
+# Environment overrides:
+#   WALLSTATE_JAR           path to wallstate.jar (default: ../build/libs/wallstate.jar)
+#   WALLSTATE_DEVICE_JAR    device-side jar path (default: /data/local/tmp/wallstate.jar)
+
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+JAR="${WALLSTATE_JAR:-$SCRIPT_DIR/../build/libs/wallstate.jar}"
+DEVICE_JAR="${WALLSTATE_DEVICE_JAR:-/data/local/tmp/wallstate.jar}"
+DEVICE_TMP_DIR="/data/local/tmp/wallstate"
+MAIN_CLASS="io.github.jacek4yang.wallstate.Main"
+SERIAL=""
+
+usage() {
+    cat <<'EOF'
+usage: scripts/wallstate [--serial SERIAL] [--jar PATH] <command> [args]
+
+commands:
+  doctor                check device environment and exact backup/restore capability
+  info                  show current wallpaper state
+  backup <output.zip>   back up wallpaper state and pull it to the host
+  inspect <backup.zip>  push an archive and show its manifest
+  verify <backup.zip>   push an archive and verify its integrity
+  restore <backup.zip>  push an archive and restore it on the device
+
+options:
+  -s, --serial SERIAL   adb device serial (required when multiple devices are attached)
+  --jar PATH            local wallstate.jar to push (default: build/libs/wallstate.jar)
+  -h, --help            show this help
+EOF
+}
+
+quote_for_device_shell() {
+    # Single-quote a string for the device shell: ' -> '\''
+    printf "'%s'" "$(printf '%s' "$1" | sed -e "s/'/'\\\\''/g")"
+}
+
+device_shell() {
+    # device_shell <command-string>
+    if [ -n "$SERIAL" ]; then
+        adb -s "$SERIAL" shell "$1"
+    else
+        adb shell "$1"
+    fi
+}
+
+run_wallstate() {
+    # run_wallstate <args...>  (each arg quoted separately for the device shell)
+    remote="CLASSPATH=$(quote_for_device_shell "$DEVICE_JAR") app_process /system/bin $MAIN_CLASS"
+    for arg in "$@"; do
+        remote="$remote $(quote_for_device_shell "$arg")"
+    done
+    device_shell "$remote"
+}
+
+pick_device() {
+    if [ -n "$SERIAL" ]; then
+        if ! adb -s "$SERIAL" get-state >/dev/null 2>&1; then
+            echo "wallstate: no device with serial '$SERIAL'" >&2
+            exit 1
+        fi
+        return 0
+    fi
+    DEVICES=$(adb devices | awk 'NR > 1 && $2 == "device" { print $1 }')
+    COUNT=$(printf '%s' "$DEVICES" | grep -c . || true)
+    if [ "$COUNT" -eq 0 ]; then
+        echo "wallstate: no adb device attached (see: adb devices)" >&2
+        exit 1
+    fi
+    if [ "$COUNT" -gt 1 ]; then
+        echo "wallstate: multiple devices attached; pick one with --serial:" >&2
+        printf '%s\n' "$DEVICES" | sed 's/^/  /' >&2
+        exit 1
+    fi
+    SERIAL="$DEVICES"
+}
+
+push_jar() {
+    if [ ! -f "$JAR" ]; then
+        echo "wallstate: $JAR not found; build it first with: ./gradlew wallstateJar" >&2
+        exit 2
+    fi
+    adb -s "$SERIAL" push "$JAR" "$DEVICE_JAR" >/dev/null
+}
+
+cleanup_device() {
+    # cleanup_device <path> — remove a temporary file on the device, ignore errors.
+    device_shell "rm -f $(quote_for_device_shell "$1")" >/dev/null 2>&1 || true
+}
+
+remote_size() {
+    device_shell "wc -c < $(quote_for_device_shell "$1")" | tr -d ' \r\t'
+}
+
+local_size() {
+    wc -c < "$1" | tr -d ' \r\t'
+}
+
+die() {
+    echo "wallstate: $1" >&2
+    exit 1
+}
+
+# ---- argument parsing ----
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -s|--serial)
+            [ $# -ge 2 ] || die "--serial requires a value"
+            SERIAL="$2"; shift 2 ;;
+        --jar)
+            [ $# -ge 2 ] || die "--jar requires a value"
+            JAR="$2"; shift 2 ;;
+        -h|--help)
+            usage; exit 0 ;;
+        --)
+            shift; break ;;
+        -*)
+            echo "wallstate: unknown option: $1" >&2
+            usage >&2
+            exit 2 ;;
+        *)
+            break ;;
+    esac
+done
+
+[ $# -ge 1 ] || { usage >&2; exit 2; }
+CMD="$1"
+shift
+
+command -v adb >/dev/null 2>&1 || die "adb not found in PATH"
+
+pick_device
+
+case "$CMD" in
+    version|doctor|info)
+        run_wallstate "$CMD"
+        ;;
+
+    backup)
+        [ $# -ge 1 ] || die "backup requires an output path (host .zip)"
+        OUT="$1"
+        case "$OUT" in
+            *.zip) ;;
+            *) echo "wallstate: warning: output does not end in .zip: $OUT" >&2 ;;
+        esac
+        push_jar
+        REMOTE="$DEVICE_TMP_DIR/backup-$$.zip"
+        device_shell "mkdir -p $(quote_for_device_shell "$DEVICE_TMP_DIR")" >/dev/null
+        status=0
+        run_wallstate backup "$REMOTE" || status=$?
+        if [ "$status" -ne 0 ]; then
+            cleanup_device "$REMOTE"
+            exit "$status"
+        fi
+        adb -s "$SERIAL" pull "$REMOTE" "$OUT" >/dev/null || {
+            cleanup_device "$REMOTE"
+            die "failed to pull $REMOTE"
+        }
+        REMOTE_BYTES=$(remote_size "$REMOTE")
+        LOCAL_BYTES=$(local_size "$OUT")
+        cleanup_device "$REMOTE"
+        if [ -z "$REMOTE_BYTES" ] || [ "$REMOTE_BYTES" != "$LOCAL_BYTES" ]; then
+            die "pulled archive size mismatch (device: ${REMOTE_BYTES:-unknown}, host: $LOCAL_BYTES)"
+        fi
+        echo "pulled: $OUT ($LOCAL_BYTES bytes)"
+        ;;
+
+    inspect|verify|restore)
+        [ $# -ge 1 ] || die "$CMD requires an archive path (host .zip)"
+        ARCHIVE="$1"
+        [ -f "$ARCHIVE" ] || die "archive not found: $ARCHIVE"
+        push_jar
+        REMOTE="$DEVICE_TMP_DIR/$CMD-$$.zip"
+        device_shell "mkdir -p $(quote_for_device_shell "$DEVICE_TMP_DIR")" >/dev/null
+        adb -s "$SERIAL" push "$ARCHIVE" "$REMOTE" >/dev/null || {
+            cleanup_device "$REMOTE"
+            die "failed to push $ARCHIVE"
+        }
+        status=0
+        run_wallstate "$CMD" "$REMOTE" || status=$?
+        cleanup_device "$REMOTE"
+        exit "$status"
+        ;;
+
+    *)
+        echo "wallstate: unknown command: $CMD" >&2
+        usage >&2
+        exit 2 ;;
+esac
