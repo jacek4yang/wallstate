@@ -5,3 +5,6 @@ local.properties
 *.iml
 *.zip
 !gradle/wrapper/gradle-wrapper.jar
+
+# user device backups
+backups/
