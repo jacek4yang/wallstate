@@ -40,6 +40,7 @@ object Cli {
                 "inspect" -> inspect(requireArg(command, rest))
                 "verify" -> verify(requireArg(command, rest))
                 "restore" -> restore(requireArg(command, rest))
+                "set" -> setWallpaperForTest(rest)
                 null, "-h", "--help", "help" -> usage()
                 else -> {
                     System.err.println("ERROR: unknown command '$command'")
@@ -67,6 +68,8 @@ object Cli {
         println("  inspect <backup.zip>  show archive manifest and entries")
         println("  verify <backup.zip>   verify archive integrity (schema, entries, SHA-256)")
         println("  restore <backup.zip>  transactionally restore wallpaper state from an archive")
+        println("  set <img> <system|lock|both> [dimAmount]")
+        println("                        test helper: set a wallpaper through the framework path")
         return EXIT_USAGE
     }
 
@@ -166,6 +169,45 @@ object Cli {
         val bridge = WallpaperBridge.create()
         val result = RestoreEngine(bridge).restore(File(archivePath)) { line -> println(line) }
         println("restored wallpaper state for user ${result.userId}")
+        return EXIT_OK
+    }
+
+    /**
+     * Test helper (used by scripts/acceptance.sh): sets a wallpaper image through the
+     * exact same framework write path used by restore, without crop hints (default
+     * positioning), optionally changing the dim amount. Not part of the backup/restore
+     * contract.
+     */
+    private fun setWallpaperForTest(rest: List<String>): Int {
+        val imagePath = rest.getOrNull(0)
+            ?: throw UsageException("set requires <image> <system|lock|both> [dimAmount]")
+        val destination = rest.getOrNull(1)
+            ?: throw UsageException("set requires <image> <system|lock|both> [dimAmount]")
+        val which = when (destination) {
+            "system" -> WallpaperFlags.SYSTEM
+            "lock" -> WallpaperFlags.LOCK
+            "both" -> WallpaperFlags.SYSTEM or WallpaperFlags.LOCK
+            else -> throw UsageException("destination must be system|lock|both, got '$destination'")
+        }
+        val dimAmount = rest.getOrNull(2)?.let {
+            it.toDoubleOrNull() ?: throw UsageException("dim amount must be a number in [0,1], got '$it'")
+        }?.also {
+            if (it < 0.0 || it > 1.0) throw UsageException("dim amount must be in [0,1], got $it")
+        }
+
+        AndroidEnv.requireShellUid()
+        val bridge = WallpaperBridge.create()
+        val userId = AndroidEnv.currentUser()
+        val file = File(imagePath)
+        if (!file.isFile) throw WallstateException("image not found: $imagePath")
+        val write = bridge.openWallpaperWrite(null, null, true, which, userId)
+        try {
+            file.inputStream().use { input -> input.copyTo(write.stream()) }
+        } finally {
+            write.finishAndAwait()
+        }
+        if (dimAmount != null) bridge.setWallpaperDimAmount(dimAmount)
+        println("set wallpaper (which=$which, user=$userId, dim=$dimAmount)")
         return EXIT_OK
     }
 

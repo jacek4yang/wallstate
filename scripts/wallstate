@@ -148,8 +148,8 @@ command -v adb >/dev/null 2>&1 || die "adb not found in PATH"
 pick_device
 
 case "$CMD" in
-    version|doctor|info)
-        run_wallstate "$CMD"
+    version|doctor|info|set)
+        run_wallstate "$CMD" "$@"
         ;;
 
     backup)

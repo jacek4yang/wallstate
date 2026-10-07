@@ -2,12 +2,13 @@ package io.github.jacek4yang.wallstate
 
 import android.graphics.Point
 import android.graphics.Rect
+import android.os.Binder
 import android.os.Bundle
 import android.os.IBinder
+import android.os.Parcel
 import android.os.ParcelFileDescriptor
 import java.io.InputStream
 import java.io.OutputStream
-import java.lang.reflect.InvocationHandler
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
@@ -382,18 +383,67 @@ class WallpaperBridge private constructor(
         return listOf(point, Point(point.y, point.x))
     }
 
+    /**
+     * Completion signal for setWallpaper.
+     *
+     * The service requires an IWallpaperManagerCallback binder. A dynamic proxy alone
+     * cannot be marshalled (its asBinder() has no backing Binder), so this wraps a real
+     * android.os.Binder that answers the callback interface's two transaction codes,
+     * resolved from the framework Stub class via reflection (no hard-coded codes).
+     */
     class Completion internal constructor() {
         private val latch = CountDownLatch(1)
+        private val descriptor: String
+        private val txOnWallpaperChanged: Int
+        private val txOnWallpaperColorsChanged: Int
 
-        val callback: Any =
-            Proxy.newProxyInstance(
-                WallpaperBridge::class.java.classLoader,
-                arrayOf(Class.forName("android.app.IWallpaperManagerCallback")),
-                InvocationHandler { _, method, _ ->
-                    if (method.name == "onWallpaperChanged") latch.countDown()
-                    null
-                },
-            )
+        init {
+            val stubClass = Class.forName("android.app.IWallpaperManagerCallback\$Stub")
+            descriptor = try {
+                val f = stubClass.getDeclaredField("DESCRIPTOR")
+                f.isAccessible = true
+                f.get(null) as String
+            } catch (e: Exception) {
+                "android.app.IWallpaperManagerCallback"
+            }
+            val txChanged = stubClass.getDeclaredField("TRANSACTION_onWallpaperChanged")
+            txChanged.isAccessible = true
+            txOnWallpaperChanged = txChanged.getInt(null)
+            txOnWallpaperColorsChanged = try {
+                val f = stubClass.getDeclaredField("TRANSACTION_onWallpaperColorsChanged")
+                f.isAccessible = true
+                f.getInt(null)
+            } catch (e: Exception) {
+                txOnWallpaperChanged + 1
+            }
+        }
+
+        private val binder = object : Binder() {
+            override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
+                when (code) {
+                    txOnWallpaperChanged -> {
+                        data.enforceInterface(descriptor)
+                        latch.countDown()
+                        return true
+                    }
+                    txOnWallpaperColorsChanged -> {
+                        // Colors notifications are irrelevant here; consume the call.
+                        data.enforceInterface(descriptor)
+                        return true
+                    }
+                    else -> return super.onTransact(code, data, reply, flags)
+                }
+            }
+        }
+
+        /** Object passable as an IWallpaperManagerCallback parameter; asBinder is real. */
+        val callback: Any = Proxy.newProxyInstance(
+            WallpaperBridge::class.java.classLoader,
+            arrayOf(Class.forName("android.app.IWallpaperManagerCallback")),
+            { _, method, _ ->
+                if (method.name == "asBinder") binder else null
+            },
+        )
 
         fun await() {
             if (!latch.await(COMPLETION_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
