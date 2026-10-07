@@ -11,7 +11,8 @@ Initial release.
 ### Added
 
 - Device-side CLI (`version`, `doctor`, `info`, `backup`, `inspect`, `verify`,
-  `restore`) executed as Android shell uid (2000) through
+  `restore`, plus a `set` test helper used by the acceptance script) executed as
+  Android shell uid (2000) through
   `CLASSPATH=... app_process /system/bin io.github.jacek4yang.wallstate.Main`.
 - Exact static wallpaper backup: byte-identical original wallpaper data streamed
   from WallpaperManagerService (`getWallpaperWithFeature(..., getCropped=false)`),
@@ -40,5 +41,7 @@ Initial release.
 
 ### Target
 
-- OnePlus / OxygenOS, current Android builds with Android 15/16 wallpaper service
-  APIs; no root; no Shizuku; no APK.
+- Android 15/16 wallpaper service APIs under shell uid; no root; no Shizuku; no APK.
+- Validated end-to-end on Android 16 (API 36, `google/emu64xa:16/BE2A.250530.026.F3`)
+  in an emulator: full acceptance sequence including both lock-relationship
+  transitions, a second backup/restore cycle, and rollback failure injection.

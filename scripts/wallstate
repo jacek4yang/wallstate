@@ -96,6 +96,9 @@ push_jar() {
         exit 2
     fi
     adb -s "$SERIAL" push "$JAR" "$DEVICE_JAR" >/dev/null
+    # Refresh the mtime: after an unclean device shutdown, ART can keep a stale
+    # dex-cache entry keyed to the old (path, mtime); touching forces a fresh load.
+    device_shell "touch $(quote_for_device_shell "$DEVICE_JAR")" >/dev/null
 }
 
 cleanup_device() {
@@ -149,6 +152,7 @@ pick_device
 
 case "$CMD" in
     version|doctor|info|set)
+        push_jar
         run_wallstate "$CMD" "$@"
         ;;
 

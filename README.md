@@ -123,6 +123,7 @@ location. Exit status is propagated from the device command.
 | `inspect <backup.zip>` | show the archive manifest and entries |
 | `verify <backup.zip>` | verify archive integrity: schema, entry set, all SHA-256 digests |
 | `restore <backup.zip>` | transactionally restore the wallpaper state |
+| `set <img> <system\|lock\|both> [dim]` | test helper: set a wallpaper through the framework write path (used by `scripts/acceptance.sh`) |
 
 `wallstate verify` verifies the **archive**; verification after `restore` verifies the
 **device state** (original bytes, crop maps, lock relationship, dim amount).
@@ -200,11 +201,18 @@ before any mutation.
 
 ## Compatibility
 
-Tested against the current connected OnePlus/OxygenOS device (see CHANGELOG for the
-exact build). The tool probes the actual framework at runtime (`doctor` reports every
-method it found or missed) rather than hard-coding assumptions or binder transaction
-numbers, so differing OxygenOS builds produce precise diagnostics instead of undefined
-behavior.
+v1.0.0 was validated end-to-end on Android 16 (API 36, AOSP `google/emu64xa:16/
+BE2A.250530.026.F3`) running in an emulator on the development machine, including the
+real-device acceptance sequence: seed backup, framework-path mutation, restore,
+device-state verification for both lock relationships (separate and inherited), a
+second backup/restore cycle, and a deliberate failure-injection of the automatic
+rollback path.
+
+The tool probes the actual framework at runtime (`doctor` reports every method it
+found or missed) rather than hard-coding assumptions or binder transaction numbers,
+so OxygenOS builds that differ from AOSP produce precise diagnostics instead of
+undefined behavior. Restore to the same device model/SDK is friction-free; anything
+else is rejected up front.
 
 ## Troubleshooting
 
@@ -218,6 +226,14 @@ behavior.
   different device/build; wallstate refuses rather than risk wrong crop semantics.
 - `FATAL:` on restore — automatic rollback also failed; the phone keeps the last
   applied state; the rollback archive path is printed, re-run `restore` with it.
+- On an emulator (or after an unclean device shutdown), `app_process` can abort at
+  startup with `ClassNotFoundException: io.github.jacek4yang.wallstate.Main` even
+  though the jar is intact: the runtime's dex cache is keyed to the old file state.
+  Re-pushing the jar (the wrapper does this on every run) or `adb shell touch
+  /data/local/tmp/wallstate.jar` clears it.
+- `scripts/acceptance.sh` runs the full backup/mutate/restore/verify acceptance
+  sequence (both lock-relationship transitions plus a deliberate failure-injection
+  of the rollback path) and always ends by restoring the user's original state.
 
 ## License
 
